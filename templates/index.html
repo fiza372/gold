@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gold (XAU/USD) Scalping Strategy Terminal</title>
+    <!-- Lightweight Charts (Open Source & 100% Free) -->
+    <script src="https://unpkg.com/lightweight-charts@4.1.1/dist/lightweight-charts.standalone.production.js"></script>
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@600;700;800&family=Plus+Jakarta+Sans:wght@500;600;700;800;900&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="zoom-normal">
+
+    <!-- TOP HEADER BAR -->
+    <header class="navbar">
+        <div class="nav-left">
+            <div class="logo">
+                <i class="fa-solid fa-coins gold-icon"></i>
+                <span class="logo-title">GOLD SCALPER</span>
+                <span class="badge-pro">PRO</span>
+            </div>
+            <div class="price-pill">
+                <span class="pill-label">LIVE GOLD:</span>
+                <span id="livePrice" class="pill-price">$----.--</span>
+            </div>
+        </div>
+
+        <div class="nav-right">
+            <!-- TEXT SIZE QUICK CONTROLS -->
+            <div class="zoom-controls">
+                <span class="zoom-label"><i class="fa-solid fa-text-height"></i> Text Size:</span>
+                <button class="btn-zoom" onclick="changeZoom(-1)" title="Smaller Text">A-</button>
+                <button class="btn-zoom active" id="btnZoomReset" onclick="resetZoom()" title="Default Text Size">100%</button>
+                <button class="btn-zoom" onclick="changeZoom(1)" title="Larger Text">A+</button>
+            </div>
+
+            <div class="connection-status">
+                <span class="pulse-dot"></span>
+                <span id="scanStatusText">Auto-Scanning (Every 30s)</span>
+            </div>
+
+            <button id="btnScanNow" class="btn btn-primary" onclick="triggerManualScan()">
+                <i class="fa-solid fa-arrows-rotate" id="scanIcon"></i> Check Market Now
+            </button>
+
+            <button id="btnSoundToggle" class="btn btn-secondary" onclick="toggleAudioAlert()">
+                <i class="fa-solid fa-volume-high" id="soundIcon"></i> Sound: ON
+            </button>
+
+            <button id="btnSettings" class="btn btn-secondary" onclick="openConfigModal()" title="Free Telegram Alert Settings">
+                <i class="fa-brands fa-telegram text-primary"></i> Free Phone Alerts
+            </button>
+        </div>
+    </header>
+
+    <!-- MAIN DASHBOARD -->
+    <main class="dashboard-grid">
+
+        <!-- LEFT COLUMN: STRATEGY CHECKLIST & SIGNAL CARDS (WIDE & READABLE) -->
+        <section class="strategy-sidebar">
+            
+            <!-- ACTIVE TRADE SIGNAL HERO CARD -->
+            <div id="signalHeroCard" class="card signal-card waiting">
+                <div class="card-header">
+                    <span class="tag"><i class="fa-solid fa-crosshairs"></i> CURRENT TRADE SIGNAL</span>
+                    <span id="signalTime" class="signal-time">Auto-updating</span>
+                </div>
+                
+                <div id="signalEmptyState" class="signal-empty">
+                    <i class="fa-solid fa-hourglass-start empty-icon"></i>
+                    <h3>Waiting for Valid Setup</h3>
+                    <p class="empty-subtext">The scanner is watching live Gold price. <b>You don't need to stare at the chart.</b> When the 1H & 15M trends align and liquidity is swept, this box will turn <b style="color:#10b981;">GREEN (BUY)</b> or <b style="color:#ef4444;">RED (SELL)</b> with exact numbers.</p>
+                </div>
+
+                <div id="signalActiveState" class="signal-active" style="display: none;">
+                    <div class="signal-badge" id="signalBadge">READY TO BUY (LONG)</div>
+                    
+                    <div class="signal-metrics">
+                        <div class="metric-box entry-box">
+                            <span class="metric-title">1. ENTRY PRICE</span>
+                            <span class="metric-value" id="sigEntry">--</span>
+                        </div>
+                        <div class="metric-box sl-box">
+                            <span class="metric-title">2. STOP LOSS (SL)</span>
+                            <span class="metric-value" id="sigSL">--</span>
+                        </div>
+                        <div class="metric-box tp-box">
+                            <span class="metric-title">3. TAKE PROFIT (TP)</span>
+                            <span class="metric-value" id="sigTP">--</span>
+                        </div>
+                        <div class="metric-box rr-box">
+                            <span class="metric-title">RISK : REWARD</span>
+                            <span class="metric-value" id="sigRR">1 : 2.5</span>
+                        </div>
+                    </div>
+                    
+                    <div class="signal-reason-banner">
+                        <i class="fa-solid fa-circle-check text-success"></i>
+                        <span id="sigReason">Both 1H and 15M trends aligned + liquidity sweep confirmed.</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- THE 5-STEP EXPLANATION CHECKLIST -->
+            <div class="card checklist-card">
+                <div class="card-title">
+                    <i class="fa-solid fa-list-check"></i> Strategy Checklist (The 5 Steps)
+                </div>
+
+                <!-- Step 1 -->
+                <div class="step-item" id="step1Item">
+                    <div class="step-badge" id="badgeStep1Number">1</div>
+                    <div class="step-content">
+                        <div class="step-title">Step 1: Are Both Timeframes in the Same Trend?</div>
+                        <div class="step-desc">Rule: 1-Hour and 15-Minute must agree before looking for any trade.</div>
+                        <div class="timeframe-badges">
+                            <div class="badge" id="badge1H">1-Hour: Loading...</div>
+                            <div class="badge" id="badge15M">15-Minute: Loading...</div>
+                        </div>
+                    </div>
+                    <div class="step-status" id="statusStep1"><i class="fa-solid fa-hourglass-start status-waiting"></i></div>
+                </div>
+
+                <!-- Step 2 -->
+                <div class="step-item" id="step2Item">
+                    <div class="step-badge" id="badgeStep2Number">2</div>
+                    <div class="step-content">
+                        <div class="step-title">Step 2: Trap Levels (Where Retail Stop Losses Sit)</div>
+                        <div class="step-desc">Identifies recent swing highs and swing lows:</div>
+                        <div class="liquidity-details">
+                            <div class="liq-box high">
+                                <span class="liq-lbl">Ceiling (Buy-side Liquidity):</span>
+                                <span class="liq-val" id="valHighLiquidity">--</span>
+                            </div>
+                            <div class="liq-box low">
+                                <span class="liq-lbl">Floor (Sell-side Liquidity):</span>
+                                <span class="liq-val" id="valLowLiquidity">--</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="step-status" id="statusStep2"><i class="fa-solid fa-circle-check text-success"></i></div>
+                </div>
+
+                <!-- Steps 3 & 4 -->
+                <div class="step-item" id="step3Item">
+                    <div class="step-badge" id="badgeStep3Number">3 & 4</div>
+                    <div class="step-content">
+                        <div class="step-title">Steps 3 & 4: Liquidity Sweep & Entry Confirmation</div>
+                        <div class="step-desc">Did price spike past the level and close back inside?</div>
+                        <div id="sweepStatusDetail" class="sweep-text">Waiting for price to sweep key levels...</div>
+                    </div>
+                    <div class="step-status" id="statusStep3"><i class="fa-solid fa-circle-question status-waiting"></i></div>
+                </div>
+
+                <!-- Step 5 -->
+                <div class="step-item" id="step5Item">
+                    <div class="step-badge" id="badgeStep5Number">5</div>
+                    <div class="step-content">
+                        <div class="step-title">Step 5: Exit & Risk Management</div>
+                        <div class="step-desc">Strict Stop Loss placed behind the sweep wick. Take profit at nearest 15M target (1:2.5 RR).</div>
+                        <div class="rule-reminder">"Get in fast, take profit, get out faster."</div>
+                    </div>
+                    <div class="step-status" id="statusStep5"><i class="fa-solid fa-shield-halved text-primary"></i></div>
+                </div>
+            </div>
+
+            <!-- FREE PHONE ALERTS BANNER -->
+            <div class="card alert-banner" onclick="openConfigModal()">
+                <div class="alert-banner-left">
+                    <i class="fa-brands fa-telegram telegram-logo"></i>
+                    <div>
+                        <div class="banner-title">Want Alerts Sent Directly to Your Phone?</div>
+                        <div class="banner-subtext">Set up free Telegram alerts so you can close this screen and get notified on mobile when a trade is ready.</div>
+                    </div>
+                </div>
+                <button class="btn btn-primary btn-md">Setup Free Alerts</button>
+            </div>
+
+        </section>
+
+        <!-- RIGHT COLUMN: INTERACTIVE CANDLESTICK CHART -->
+        <section class="chart-section">
+            <div class="card chart-card">
+                <div class="chart-header">
+                    <div class="chart-title">
+                        <i class="fa-solid fa-chart-candlestick"></i> Live 15-Minute Gold (XAU/USD) Execution Chart
+                    </div>
+                    <div class="chart-legend">
+                        <span class="legend-item"><span class="legend-color bull"></span> Green = Buyers</span>
+                        <span class="legend-item"><span class="legend-color bear"></span> Red = Sellers</span>
+                        <span class="legend-item"><span class="legend-color high-liq"></span> Orange = Ceiling High</span>
+                        <span class="legend-item"><span class="legend-color low-liq"></span> Cyan = Floor Low</span>
+                    </div>
+                </div>
+
+                <div id="tvChartContainer" class="tv-chart-container"></div>
+            </div>
+        </section>
+
+    </main>
+
+    <!-- CONFIGURATION & TELEGRAM MODAL -->
+    <div id="configModal" class="modal-backdrop" style="display: none;">
+        <div class="modal-box">
+            <div class="modal-header">
+                <h3><i class="fa-solid fa-sliders"></i> Strategy & Phone Alert Settings</h3>
+                <button class="btn-close" onclick="closeConfigModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>How Would You Like to Enter Trades?</label>
+                    <select id="cfgEntryMode" class="form-control">
+                        <option value="Conservative (MSS Confirmation)">Conservative (Wait for confirmed trend shift - Recommended)</option>
+                        <option value="Aggressive (Sweep Only)">Aggressive (Enter immediately when candle sweeps liquidity)</option>
+                    </select>
+                    <small class="form-hint">Conservative mode has fewer false breakouts and higher win rate.</small>
+                </div>
+
+                <div class="form-group">
+                    <label>Target Risk-to-Reward Ratio (RR)</label>
+                    <input type="number" id="cfgRR" class="form-control" value="2.5" step="0.5" min="1.0" max="6.0">
+                    <small class="form-hint">Brad Goh recommends targeting 1:2 to 1:3 on Gold to avoid reversals.</small>
+                </div>
+
+                <hr class="divider">
+
+                <h4><i class="fa-brands fa-telegram text-primary"></i> Free Phone Notifications via Telegram</h4>
+                <p class="modal-desc">Follow these 2 quick steps to receive trade alerts straight to your phone:</p>
+                
+                <ol class="setup-steps">
+                    <li>Open Telegram and search for <b>@BotFather</b>. Send <code>/newbot</code> and copy your <b>Bot Token</b>.</li>
+                    <li>Search for <b>@userinfobot</b> on Telegram. It will tell you your <b>Chat ID</b> number.</li>
+                </ol>
+
+                <div class="form-group">
+                    <label>Your Telegram Bot Token:</label>
+                    <input type="text" id="cfgTgToken" class="form-control" placeholder="Paste bot token here (e.g. 7123456789:AAH...)">
+                </div>
+
+                <div class="form-group">
+                    <label>Your Telegram Chat ID:</label>
+                    <input type="text" id="cfgTgChatId" class="form-control" placeholder="Paste your Chat ID number (e.g. 123456789)">
+                </div>
+
+                <div class="btn-row">
+                    <button class="btn btn-secondary" onclick="testTelegram()">
+                        <i class="fa-solid fa-paper-plane"></i> Send Test Message to My Phone
+                    </button>
+                    <span id="tgTestMsg" class="test-feedback"></span>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeConfigModal()">Cancel</button>
+                <button class="btn btn-primary" onclick="saveConfiguration()">Save Settings</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="/static/app.js"></script>
+</body>
+</html>

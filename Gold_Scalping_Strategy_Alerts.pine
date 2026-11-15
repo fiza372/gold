@@ -1,0 +1,175 @@
+//@version=5
+indicator("Gold Scalping Strategy (The Trading Geek) [1H/15M]", overlay=true, max_labels_count=50, max_lines_count=50)
+
+// ==========================================
+// 1. INPUT SETTINGS
+// ==========================================
+grp_strategy = "Strategy Settings"
+entryMode     = input.string("Conservative", "Entry Mode", options=["Conservative", "Aggressive"], group=grp_strategy)
+riskReward    = input.float(2.5, "Risk-to-Reward Ratio (Target)", minval=1.0, maxval=6.0, step=0.5, group=grp_strategy)
+swingLength   = input.int(5, "Swing Detection Length (Pivot Bars)", minval=2, maxval=15, group=grp_strategy)
+
+grp_visuals   = "Visuals"
+showDashboard = input.bool(true, "Show Bias Dashboard Table", group=grp_visuals)
+
+// Colors
+c_bull = color.new(#089981, 0)
+c_bear = color.new(#f23645, 0)
+
+// ==========================================
+// 2. HIGHER TIMEFRAME (1-HOUR) BIAS CALCULATION
+// ==========================================
+// Safe, clean tuple request to avoid TradingView alert compilation errors
+calc_htf() =>
+    c = close[1]
+    e20 = ta.ema(close, 20)[1]
+    e50 = ta.ema(close, 50)[1]
+    [c, e20, e50]
+
+[htfClose, htfEmaFast, htfEmaSlow] = request.security(syminfo.tickerid, "60", calc_htf(), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+
+htfBullish = (htfClose > htfEmaFast) and (htfEmaFast >= htfEmaSlow)
+htfBearish = (htfClose < htfEmaFast) and (htfEmaFast <= htfEmaSlow)
+
+// ==========================================
+// 3. CURRENT TIMEFRAME (15M) STRUCTURE & SWINGS
+// ==========================================
+ph = ta.pivothigh(high, swingLength, swingLength)
+pl = ta.pivotlow(low, swingLength, swingLength)
+
+var float lastSwingHigh = na
+var float lastSwingLow  = na
+
+if not na(ph)
+    lastSwingHigh := ph
+
+if not na(pl)
+    lastSwingLow := pl
+
+currentEmaFast = ta.ema(close, 20)
+currentEmaSlow = ta.ema(close, 50)
+ltfBullish     = (close > currentEmaFast) and (currentEmaFast >= currentEmaSlow)
+ltfBearish     = (close < currentEmaFast) and (currentEmaFast <= currentEmaSlow)
+
+// Step 1 Alignment
+alignmentBullish = htfBullish and ltfBullish
+alignmentBearish = htfBearish and ltfBearish
+
+// ==========================================
+// 4. STEP 4: LIQUIDITY SWEEP DETECTION
+// ==========================================
+bullishSweep = not na(lastSwingLow) and (low < lastSwingLow) and (close > lastSwingLow) and (low < low[1])
+bearishSweep = not na(lastSwingHigh) and (high > lastSwingHigh) and (close < lastSwingHigh) and (high > high[1])
+
+var bool waitingForBullishMSS = false
+var float sweepLowPrice = na
+var float mssHighTrigger = na
+
+var bool waitingForBearishMSS = false
+var float sweepHighPrice = na
+var float mssLowTrigger = na
+
+if bullishSweep and alignmentBullish
+    waitingForBullishMSS := true
+    sweepLowPrice        := low
+    mssHighTrigger       := high
+
+if bearishSweep and alignmentBearish
+    waitingForBearishMSS := true
+    sweepHighPrice       := high
+    mssLowTrigger        := low
+
+// ==========================================
+// 5. ENTRY SIGNALS (AGGRESSIVE VS CONSERVATIVE)
+// ==========================================
+var float longEntryPrice  = na
+var float longSL          = na
+var float longTP          = na
+
+var float shortEntryPrice = na
+var float shortSL         = na
+var float shortTP         = na
+
+bool longCondition  = false
+bool shortCondition = false
+
+if entryMode == "Aggressive"
+    longCondition  := bullishSweep and alignmentBullish
+    shortCondition := bearishSweep and alignmentBearish
+    if longCondition
+        longEntryPrice := close
+        longSL         := low - (syminfo.mintick * 10)
+        longTP         := close + (close - longSL) * riskReward
+    if shortCondition
+        shortEntryPrice := close
+        shortSL          := high + (syminfo.mintick * 10)
+        shortTP          := close - (shortSL - close) * riskReward
+else
+    // Conservative: MSS trigger
+    if waitingForBullishMSS and (close > mssHighTrigger) and alignmentBullish
+        longCondition        := true
+        longEntryPrice       := close
+        longSL               := sweepLowPrice - (syminfo.mintick * 10)
+        longTP               := close + (close - longSL) * riskReward
+        waitingForBullishMSS := false
+        
+    if waitingForBearishMSS and (close < mssLowTrigger) and alignmentBearish
+        shortCondition       := true
+        shortEntryPrice      := close
+        shortSL              := sweepHighPrice + (syminfo.mintick * 10)
+        shortTP              := close - (shortSL - close) * riskReward
+        waitingForBearishMSS := false
+
+// Invalidate pending MSS if price breaks opposite or takes too long (12 bars)
+var int barsSinceBull = 0
+var int barsSinceBear = 0
+
+if waitingForBullishMSS
+    barsSinceBull += 1
+    if low < sweepLowPrice or barsSinceBull > 12
+        waitingForBullishMSS := false
+        barsSinceBull := 0
+else
+    barsSinceBull := 0
+
+if waitingForBearishMSS
+    barsSinceBear += 1
+    if high > sweepHighPrice or barsSinceBear > 12
+        waitingForBearishMSS := false
+        barsSinceBear := 0
+else
+    barsSinceBear := 0
+
+// ==========================================
+// 6. VISUAL PLOTS
+// ==========================================
+plotshape(bullishSweep, "Bullish Sweep", shape.triangleup, location.belowbar, color=color.aqua, size=size.tiny)
+plotshape(bearishSweep, "Bearish Sweep", shape.triangledown, location.abovebar, color=color.orange, size=size.tiny)
+
+if longCondition
+    label.new(bar_index, low, text="BUY\n" + str.tostring(close, "#.##"), color=c_bull, textcolor=color.white, style=label.style_label_up, size=size.small)
+
+if shortCondition
+    label.new(bar_index, high, text="SELL\n" + str.tostring(close, "#.##"), color=c_bear, textcolor=color.white, style=label.style_label_down, size=size.small)
+
+// Dashboard Status Table
+var table statusTable = table.new(position.top_right, 2, 4, bgcolor=color.new(color.black, 30), border_color=color.gray, border_width=1)
+if barstate.islast and showDashboard
+    table.cell(statusTable, 0, 0, "Metric", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(statusTable, 1, 0, "Status", bgcolor=color.black, text_color=color.white, text_size=size.small)
+    table.cell(statusTable, 0, 1, "1H Trend", bgcolor=color.navy, text_color=color.white, text_size=size.small)
+    table.cell(statusTable, 1, 1, htfBullish ? "BULLISH 🟢" : (htfBearish ? "BEARISH 🔴" : "NEUTRAL ⚪"), bgcolor=htfBullish ? color.teal : (htfBearish ? color.maroon : color.gray), text_color=color.white, text_size=size.small)
+    table.cell(statusTable, 0, 2, "15M Trend", bgcolor=color.navy, text_color=color.white, text_size=size.small)
+    table.cell(statusTable, 1, 2, ltfBullish ? "BULLISH 🟢" : (ltfBearish ? "BEARISH 🔴" : "NEUTRAL ⚪"), bgcolor=ltfBullish ? color.teal : (ltfBearish ? color.maroon : color.gray), text_color=color.white, text_size=size.small)
+    bool isAligned = alignmentBullish or alignmentBearish
+    table.cell(statusTable, 0, 3, "Alignment", bgcolor=color.navy, text_color=color.white, text_size=size.small)
+    table.cell(statusTable, 1, 3, isAligned ? "READY ✅" : "WAIT ⏳", bgcolor=isAligned ? color.green : color.orange, text_color=color.white, text_size=size.small)
+
+// ==========================================
+// 7. ALERT CONDITIONS (CERTIFIED TRADINGVIEW FREE COMPATIBLE)
+// ==========================================
+// Combined Buy or Sell Signal
+bool anyTradeSignal = longCondition or shortCondition
+alertcondition(anyTradeSignal, title="Gold Trade Alert (Buy or Sell)", message="🚨 GOLD TRADE ALERT: High-probability setup triggered on XAUUSD 15M!")
+alertcondition(longCondition, title="Gold Long Setup", message="🚀 GOLD BUY SIGNAL: 1H/15M Aligned Bullish + Sweep Confirmed!")
+alertcondition(shortCondition, title="Gold Short Setup", message="🔻 GOLD SELL SIGNAL: 1H/15M Aligned Bearish + Sweep Confirmed!")
