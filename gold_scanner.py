@@ -1,5 +1,6 @@
 import os
 import sys
+import time
 import requests
 from datetime import datetime
 import pandas as pd
@@ -9,17 +10,18 @@ def send_telegram(msg):
     token = os.environ.get("TELEGRAM_TOKEN", "").strip()
     chat_id = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
     if not token or not chat_id:
-        print("Note: TELEGRAM_TOKEN or TELEGRAM_CHAT_ID not set in environment.")
+        print("Note: TELEGRAM_TOKEN or TELEGRAM_CHAT_ID is missing from secrets.")
         return False
     try:
         url = f"https://api.telegram.org/bot{token}/sendMessage"
         payload = {"chat_id": chat_id, "text": msg, "parse_mode": "Markdown"}
-        r = requests.post(url, json=payload, timeout=10)
+        headers = {"User-Agent": "Mozilla/5.0"}
+        r = requests.post(url, json=payload, headers=headers, timeout=12)
         if r.status_code == 200:
             print("✅ Telegram notification sent successfully!")
             return True
         else:
-            print("❌ Telegram error:", r.text)
+            print(f"❌ Telegram API returned status {r.status_code}: {r.text}")
             return False
     except Exception as e:
         print("❌ Telegram request failed:", e)
@@ -30,13 +32,26 @@ def analyze_gold():
     print(f"==================================================")
     print(f"📊 Gold (XAU/USD) Cloud Scanner - {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}")
     print(f"==================================================")
+
+    # If triggered manually or SEND_TEST is true, send an instant confirmation ping!
+    is_test = os.environ.get("SEND_TEST", "").lower() in ["true", "1", "yes"] or "--test" in sys.argv
+    if is_test:
+        print("Sending manual test confirmation to Telegram...")
+        test_msg = (
+            "🔔 *Gold Cloud Scanner is LIVE!* 🚀\n\n"
+            "✅ Your 24/7 cloud automation is working perfectly!\n"
+            "📅 *Market Notice:* Gold trades Mon-Fri. Whenever a valid 1H/15M setup triggers, you will receive exact Entry, Stop Loss, and Take Profit here."
+        )
+        send_telegram(test_msg)
     
     # 1. Fetch 1-Hour data for macro trend
     print("Fetching 1-Hour data...")
     df_1h = yf.download(symbol, period="5d", interval="1h", progress=False)
     if df_1h.empty:
-        print("Error: Could not retrieve 1H data.")
-        return
+        df_1h = yf.download("XAUUSD=X", period="5d", interval="1h", progress=False)
+        if df_1h.empty:
+            print("Market data unavailable currently.")
+            return
     
     if isinstance(df_1h.columns, pd.MultiIndex):
         df_1h.columns = [col[0] for col in df_1h.columns]
@@ -54,10 +69,12 @@ def analyze_gold():
     
     # 2. Fetch 15-Minute data for execution & sweeps
     print("Fetching 15-Minute data...")
-    df_15m = yf.download(symbol, period="2d", interval="15m", progress=False)
+    df_15m = yf.download(symbol, period="5d", interval="15m", progress=False)
     if df_15m.empty:
-        print("Error: Could not retrieve 15M data.")
-        return
+        df_15m = yf.download("XAUUSD=X", period="5d", interval="15m", progress=False)
+        if df_15m.empty:
+            print("15M data unavailable.")
+            return
 
     if isinstance(df_15m.columns, pd.MultiIndex):
         df_15m.columns = [col[0] for col in df_15m.columns]
@@ -175,12 +192,4 @@ def analyze_gold():
     print("====================================================\n")
 
 if __name__ == '__main__':
-    if "--test" in sys.argv:
-        print("Testing Telegram connection...")
-        success = send_telegram("✅ *Gold Scanner Test Alert!* Your 24/7 cloud bot is successfully connected.")
-        if success:
-            print("Test alert sent successfully!")
-        else:
-            print("Failed to send test alert. Check your TELEGRAM_TOKEN and TELEGRAM_CHAT_ID.")
-    else:
-        analyze_gold()
+    analyze_gold()

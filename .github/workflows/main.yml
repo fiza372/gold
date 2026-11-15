@@ -2,9 +2,9 @@ name: Gold Strategy 24-7 Cloud Scanner
 
 on:
   schedule:
-    # Runs every 15 minutes Monday through Friday
+    # Runs every 15 minutes Monday through Friday (UTC)
     - cron: '*/15 * * * 1-5'
-  workflow_dispatch: # Allows manual trigger anytime from GitHub
+  workflow_dispatch: # Allows you to click "Run workflow" manually from GitHub anytime!
 
 jobs:
   scan:
@@ -27,5 +27,6 @@ jobs:
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          SEND_TEST: ${{ github.event_name == 'workflow_dispatch' && 'true' || 'false' }}
         run: |
           python gold_scanner.py
