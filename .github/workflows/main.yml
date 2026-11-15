@@ -1,0 +1,31 @@
+name: Gold Strategy 24-7 Cloud Scanner
+
+on:
+  schedule:
+    # Runs every 15 minutes Monday through Friday
+    - cron: '*/15 * * * 1-5'
+  workflow_dispatch: # Allows manual trigger anytime from GitHub
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install yfinance pandas requests
+
+      - name: Run Gold Scanner
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          python gold_scanner.py
