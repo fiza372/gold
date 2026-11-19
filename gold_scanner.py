@@ -7,59 +7,91 @@ import pandas as pd
 import yfinance as yf
 
 def get_telegram_creds():
-    token = os.environ.get("TELEGRAM_TOKEN", "").strip()
-    chat_id = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
+    token = os.environ.get("TELEGRAM_TOKEN", "").strip().strip('"').strip("'")
+    chat_id = os.environ.get("TELEGRAM_CHAT_ID", "").strip().strip('"').strip("'")
     return token, chat_id
 
-def send_telegram(msg):
-    token, chat_id = get_telegram_creds()
-    if not token or not chat_id:
-        print("Note: TELEGRAM_TOKEN or TELEGRAM_CHAT_ID is missing.")
+def send_telegram(msg, target_chat_id=None):
+    token, default_chat_id = get_telegram_creds()
+    recipient = str(target_chat_id or default_chat_id).strip()
+    
+    if not token:
+        print("❌ Error: TELEGRAM_TOKEN is missing or blank!")
         return False
+    if not recipient:
+        print("❌ Error: TELEGRAM_CHAT_ID is missing or blank!")
+        return False
+
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    headers = {"User-Agent": "Mozilla/5.0"}
+    
+    # Try 1: Send with Markdown
     try:
-        url = f"https://api.telegram.org/bot{token}/sendMessage"
-        payload = {"chat_id": chat_id, "text": msg, "parse_mode": "Markdown"}
-        headers = {"User-Agent": "Mozilla/5.0"}
+        payload = {"chat_id": recipient, "text": msg, "parse_mode": "Markdown"}
         r = requests.post(url, json=payload, headers=headers, timeout=12)
         if r.status_code == 200:
-            print("✅ Telegram notification sent successfully!")
+            print(f"✅ Telegram message delivered successfully to chat {recipient}!")
             return True
         else:
-            print(f"❌ Telegram API returned status {r.status_code}: {r.text}")
+            print(f"⚠️ Telegram Markdown send failed ({r.status_code}): {r.text}. Retrying with plain text...")
+    except Exception as e:
+        print(f"⚠️ Telegram request exception: {e}. Retrying with plain text...")
+
+    # Try 2: Robust plain-text fallback (immune to Markdown formatting errors)
+    try:
+        clean_text = msg.replace("*", "").replace("_", "").replace("`", "")
+        payload_plain = {"chat_id": recipient, "text": clean_text}
+        r2 = requests.post(url, json=payload_plain, headers=headers, timeout=12)
+        if r2.status_code == 200:
+            print(f"✅ Telegram message delivered (plain text fallback) to chat {recipient}!")
+            return True
+        else:
+            print(f"❌ Telegram API error {r2.status_code}: {r2.text}")
             return False
     except Exception as e:
-        print("❌ Telegram request failed:", e)
+        print("❌ Telegram fallback request failed:", e)
         return False
 
 def check_user_messages_and_reply(current_price, htf_bias, ltf_bias, alignment_text, high_liq, low_liq, status_msg):
-    """Checks if the user sent 'update', 'status', 'daily', or any command on Telegram and replies back!"""
-    token, chat_id = get_telegram_creds()
+    """Checks if the user sent 'update', 'status', 'daily', etc. to the bot and replies directly!"""
+    token, default_chat_id = get_telegram_creds()
     if not token:
+        print("Skipping Telegram message check: No token provided.")
         return
     
     try:
         url = f"https://api.telegram.org/bot{token}/getUpdates"
         r = requests.get(url, timeout=10)
         if r.status_code != 200:
+            print(f"⚠️ getUpdates returned status {r.status_code}: {r.text}")
             return
         
         data = r.json()
         results = data.get("result", [])
         if not results:
+            print("No pending messages in Telegram bot inbox.")
             return
         
+        print(f"Found {len(results)} updates in Telegram inbox.")
         last_update_id = results[-1].get("update_id", 0)
-        user_asked = False
+        
+        # Collect distinct chats that asked for an update
+        chats_to_reply = set()
         
         for item in results:
-            msg_obj = item.get("message", {})
+            msg_obj = item.get("message") or item.get("edited_message") or {}
             text = msg_obj.get("text", "").lower().strip()
-            if any(cmd in text for cmd in ["update", "status", "daily", "check", "gold", "price", "/start"]):
-                user_asked = True
+            sender_id = msg_obj.get("chat", {}).get("id")
+            
+            # Check if text contains any trigger command
+            if any(cmd in text for cmd in ["update", "status", "daily", "check", "gold", "price", "/start", "hi", "hello"]):
+                if sender_id:
+                    chats_to_reply.add(str(sender_id))
+                    print(f"📩 Recognized update command '{text}' from chat {sender_id}!")
 
-        if user_asked:
-            print("📩 User requested update on Telegram! Sending full report...")
-            reply = (
+        # If user asked from Telegram, reply directly to their chat!
+        if chats_to_reply:
+            reply_msg = (
                 f"📊 *GOLD (XAU/USD) LIVE STATUS REPORT*\n"
                 f"⏰ *Time:* {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}\n\n"
                 f"💰 *Live Price:* ${current_price:.2f}\n"
@@ -69,13 +101,18 @@ def check_user_messages_and_reply(current_price, htf_bias, ltf_bias, alignment_t
                 f"🔺 *Ceiling (Buy-side High):* ${high_liq:.2f}\n"
                 f"🔻 *Floor (Sell-side Low):* ${low_liq:.2f}\n\n"
                 f"📌 *Strategy Status:* {status_msg}\n\n"
-                f"🤖 *Bot Health:* Running 24/7 in the cloud. You can send *update* or *daily* anytime!"
+                f"🤖 *Bot Health:* Running 24/7 in cloud. Send *update* anytime for live data!"
             )
-            send_telegram(reply)
+            for chat in chats_to_reply:
+                send_telegram(reply_msg, target_chat_id=chat)
+                
+            # Clear read messages offset
             requests.get(f"{url}?offset={last_update_id + 1}", timeout=5)
+        else:
+            print("No matching command keywords found in recent Telegram messages.")
             
     except Exception as e:
-        print("Note on Telegram check:", e)
+        print("Note on Telegram check exception:", e)
 
 def send_daily_briefing(current_price, htf_bias, ltf_bias, alignment_text, high_liq, low_liq):
     """Sends the formatted daily morning market update."""
@@ -96,7 +133,7 @@ def send_daily_briefing(current_price, htf_bias, ltf_bias, alignment_text, high_
         f"• Target quick 1:2.5 Risk-to-Reward on clean moves.\n\n"
         f"🤖 *Bot Status:* 24/7 Cloud scanner is active and watching. Have a profitable trading day!"
     )
-    print("Sending automatic Daily Market Briefing to Telegram...")
+    print("Sending Daily Market Briefing to Telegram...")
     send_telegram(msg)
 
 def analyze_gold():
@@ -104,6 +141,9 @@ def analyze_gold():
     print(f"==================================================")
     print(f"📊 Gold (XAU/USD) Smart Cloud Scanner - {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}")
     print(f"==================================================")
+    
+    token, chat_id = get_telegram_creds()
+    print(f"Debug: Token present: {bool(token)} (length: {len(token)}), Chat ID present: {bool(chat_id)} (val: {chat_id})")
 
     # 1. Fetch 1-Hour data for macro trend
     print("Fetching 1-Hour data...")
@@ -210,14 +250,15 @@ def analyze_gold():
     else:
         status_msg = "⏳ WAITING FOR TREND ALIGNMENT: 1H and 15M pointing in different directions."
 
-    # A. AUTOMATIC DAILY BRIEFING (Triggered daily at 04:00 UTC / 9:00 AM local or via DAILY_UPDATE=true)
+    # A. AUTOMATIC DAILY BRIEFING OR TEST RUN TRIGGER
     is_daily_cron = os.environ.get("IS_DAILY_CRON", "").lower() in ["true", "1", "yes"]
     is_test_run = os.environ.get("SEND_TEST", "").lower() in ["true", "1", "yes"]
     
     if is_daily_cron or is_test_run:
+        print(f"Triggering briefing: is_daily_cron={is_daily_cron}, is_test_run={is_test_run}")
         send_daily_briefing(current_price, htf_bias, ltf_bias, alignment_text, recent_swing_high, recent_swing_low)
 
-    # B. Check and reply to user commands (/update, /daily, /status)
+    # B. Check and reply directly to user commands (/update, /daily, /status)
     check_user_messages_and_reply(current_price, htf_bias, ltf_bias, alignment_text, recent_swing_high, recent_swing_low, status_msg)
 
     # C. FULL CONFIRMED ENTRY SIGNAL
