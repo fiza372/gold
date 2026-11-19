@@ -2,9 +2,16 @@ import os
 import sys
 import time
 import requests
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 import pandas as pd
 import yfinance as yf
+
+# Karachi / Pakistan Standard Time (PKT = UTC+5)
+PKT = timezone(timedelta(hours=5))
+
+def get_karachi_time():
+    """Returns the current datetime in Karachi / Pakistan Standard Time (PKT)."""
+    return datetime.now(PKT)
 
 def log_step_summary(content):
     """Writes status reports to GitHub Actions Step Summary for instant visibility."""
@@ -132,7 +139,7 @@ def fetch_market_data():
         recent_swing_high = swing_highs[-1] if swing_highs else float(df_15m['High'].max())
         recent_swing_low  = swing_lows[-1] if swing_lows else float(df_15m['Low'].min())
 
-        # Check Sweeps
+        # Check Sweeps (converted to Karachi PKT time)
         swept_bullish = False
         swept_bearish = False
         sweep_low = 0.0
@@ -145,14 +152,22 @@ def fetch_market_data():
             c_high = float(candle['High'])
             c_close = float(candle['Close'])
             
+            # Convert timestamp to Karachi PKT (UTC+5)
+            c_time = candle.name
+            if hasattr(c_time, "tzinfo") and c_time.tzinfo is not None:
+                c_pkt = c_time.astimezone(PKT)
+            else:
+                c_pkt = c_time + pd.Timedelta(hours=5)
+            fmt_time = c_pkt.strftime('%I:%M %p PKT')
+            
             if recent_swing_low and c_low < recent_swing_low and c_close > recent_swing_low:
                 swept_bullish = True
                 sweep_low = c_low
-                sweep_time = candle.name.strftime('%H:%M')
+                sweep_time = fmt_time
             if recent_swing_high and c_high > recent_swing_high and c_close < recent_swing_high:
                 swept_bearish = True
                 sweep_high = c_high
-                sweep_time = candle.name.strftime('%H:%M')
+                sweep_time = fmt_time
 
         if aligned_bullish and swept_bullish:
             status_msg = "🔥 BUY SETUP CONFIRMED! Ready to enter."
@@ -184,7 +199,7 @@ def fetch_market_data():
         return None
 
 def check_user_messages_and_reply(mkt, last_offset=0):
-    """Listens for user Telegram messages and replies immediately with live status!"""
+    """Listens for user Telegram messages and replies immediately with live status in Karachi Time (PKT)!"""
     token, default_chat_id = get_telegram_creds()
     if not token or not mkt:
         return last_offset
@@ -216,9 +231,10 @@ def check_user_messages_and_reply(mkt, last_offset=0):
 
             if sender_id and text:
                 print(f"📩 Incoming command '{text}' from Telegram chat {sender_id}!")
+                karachi_now = get_karachi_time().strftime('%Y-%m-%d %I:%M:%S %p')
                 reply_msg = (
                     f"📊 *GOLD (XAU/USD) LIVE STATUS REPORT*\n"
-                    f"⏰ *Time:* {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}\n\n"
+                    f"⏰ *Time (Karachi):* {karachi_now} PKT\n\n"
                     f"💰 *Live Price:* ${mkt['current_price']:.2f}\n"
                     f"📈 *1-Hour Trend:* {mkt['htf_bias']}\n"
                     f"📉 *15-Min Trend:* {mkt['ltf_bias']}\n"
@@ -236,8 +252,8 @@ def check_user_messages_and_reply(mkt, last_offset=0):
         return last_offset
 
 def send_daily_briefing(mkt):
-    """Sends the daily market briefing."""
-    today_str = datetime.now().strftime('%A, %b %d, %Y')
+    """Sends the daily market briefing in Karachi Time (PKT)."""
+    today_str = get_karachi_time().strftime('%A, %b %d, %Y (%I:%M %p PKT)')
     msg = (
         f"🌅 *DAILY GOLD (XAU/USD) MARKET BRIEFING*\n"
         f"📅 *Date:* {today_str}\n\n"
@@ -262,9 +278,11 @@ def run_continuous_scanner():
     masked_token = (token[:6] + "..." + token[-4:]) if len(token) > 10 else ("EMPTY" if not token else "INVALID")
     masked_chat = (chat_id[:3] + "..." + chat_id[-2:]) if len(chat_id) > 5 else (chat_id if chat_id else "EMPTY")
 
+    karachi_start = get_karachi_time().strftime('%Y-%m-%d %I:%M:%S %p')
+
     print(f"==================================================")
     print(f"📊 Gold (XAU/USD) 24/7 Continuous Cloud Scanner Starting")
-    print(f"UTC Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}")
+    print(f"Time: {karachi_start} PKT (Karachi Time)")
     print(f"Token Configured: {bool(token)} ({masked_token}) | Chat ID: {bool(chat_id)} ({masked_chat})")
     print(f"==================================================")
 
@@ -281,7 +299,7 @@ def run_continuous_scanner():
         return
 
     log_step_summary(f"""### 🪙 Gold 24/7 Cloud Scanner Run Summary
-- ⏰ **Scan Time (UTC):** `{datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}`
+- ⏰ **Scan Time (Karachi):** `{karachi_start} PKT`
 - 🔑 **TELEGRAM_TOKEN Secret:** `{'Configured (' + masked_token + ')' if token else '❌ MISSING from Secrets'}`
 - 💬 **TELEGRAM_CHAT_ID Secret:** `{'Configured (' + masked_chat + ')' if chat_id else '❌ MISSING from Secrets'}`
 - 💰 **Current Gold Price:** `${mkt['current_price']:.2f}`
@@ -301,7 +319,6 @@ def run_continuous_scanner():
             sys.exit(1)
 
     # 2. Continuous 14-Minute Active Listener & Scanner Loop
-    # Runs for 840 seconds (14 minutes), polling Telegram every 3s and market every 60s
     TOTAL_LOOP_SECONDS = 840
     start_time = time.time()
     last_market_fetch_time = time.time()
@@ -322,7 +339,7 @@ def run_continuous_scanner():
                 fresh_mkt = fetch_market_data()
                 if fresh_mkt:
                     mkt = fresh_mkt
-                    print(f"[{datetime.now().strftime('%H:%M:%S')}] Price: ${mkt['current_price']:.2f} | {mkt['alignment_text']}")
+                    print(f"[{get_karachi_time().strftime('%I:%M:%S %p')} PKT] Price: ${mkt['current_price']:.2f} | {mkt['alignment_text']}")
 
                 # C. Check Confirmed Trade Signals
                 rr = 2.5
