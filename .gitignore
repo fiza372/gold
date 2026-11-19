@@ -1,0 +1,8 @@
+config.json
+*.log
+__pycache__/
+*.pyc
+.env
+scanner_state.json
+check_signals.py
+test_pine_match.py
