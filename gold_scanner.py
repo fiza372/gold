@@ -6,6 +6,16 @@ from datetime import datetime
 import pandas as pd
 import yfinance as yf
 
+def log_step_summary(content):
+    """Writes status reports to GitHub Actions Step Summary for instant visibility."""
+    summary_file = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary_file:
+        try:
+            with open(summary_file, "a", encoding="utf-8") as f:
+                f.write(content + "\n\n")
+        except Exception as e:
+            print("Failed to write to GITHUB_STEP_SUMMARY:", e)
+
 def get_telegram_creds():
     token = os.environ.get("TELEGRAM_TOKEN", "").strip().strip('"').strip("'")
     chat_id = os.environ.get("TELEGRAM_CHAT_ID", "").strip().strip('"').strip("'")
@@ -16,10 +26,14 @@ def send_telegram(msg, target_chat_id=None):
     recipient = str(target_chat_id or default_chat_id).strip()
     
     if not token:
-        print("❌ Error: TELEGRAM_TOKEN is missing or blank!")
+        err = "❌ Error: TELEGRAM_TOKEN secret is missing or empty in GitHub Settings!"
+        print(err)
+        log_step_summary("> ❌ **Telegram Error**: `TELEGRAM_TOKEN` secret is NOT set or empty in GitHub Secrets.")
         return False
     if not recipient:
-        print("❌ Error: TELEGRAM_CHAT_ID is missing or blank!")
+        err = "❌ Error: TELEGRAM_CHAT_ID secret is missing or empty in GitHub Settings!"
+        print(err)
+        log_step_summary("> ❌ **Telegram Error**: `TELEGRAM_CHAT_ID` secret is NOT set or empty in GitHub Secrets.")
         return False
 
     url = f"https://api.telegram.org/bot{token}/sendMessage"
@@ -31,6 +45,7 @@ def send_telegram(msg, target_chat_id=None):
         r = requests.post(url, json=payload, headers=headers, timeout=12)
         if r.status_code == 200:
             print(f"✅ Telegram message delivered successfully to chat {recipient}!")
+            log_step_summary(f"> ✅ **Telegram Delivery**: Delivered successfully to chat `{recipient}` (200 OK)!")
             return True
         else:
             print(f"⚠️ Telegram Markdown send failed ({r.status_code}): {r.text}. Retrying with plain text...")
@@ -44,16 +59,29 @@ def send_telegram(msg, target_chat_id=None):
         r2 = requests.post(url, json=payload_plain, headers=headers, timeout=12)
         if r2.status_code == 200:
             print(f"✅ Telegram message delivered (plain text fallback) to chat {recipient}!")
+            log_step_summary(f"> ✅ **Telegram Delivery**: Delivered (plain text fallback) to chat `{recipient}` (200 OK)!")
             return True
         else:
-            print(f"❌ Telegram API error {r2.status_code}: {r2.text}")
+            err_msg = f"❌ Telegram API returned Error {r2.status_code}: {r2.text}"
+            print(err_msg)
+            
+            hint = ""
+            if r2.status_code == 401:
+                hint = "**Cause:** Bot token is INVALID or REVOKED! Go to Telegram `@BotFather` to generate a new token, then update `TELEGRAM_TOKEN` in GitHub Secrets."
+            elif r2.status_code == 400 and "chat not found" in r2.text.lower():
+                hint = f"**Cause:** Chat ID `{recipient}` not found. Ensure you are using your NUMERIC ID from `@userinfobot`, not your @username."
+            elif r2.status_code == 403:
+                hint = "**Cause:** Bot was never started or is blocked! You MUST search your bot on Telegram and press the **'Start'** button."
+            
+            log_step_summary(f"> ❌ **Telegram Send Failed**: `{r2.status_code} {r2.text}`\n>\n> 💡 {hint}")
             return False
     except Exception as e:
         print("❌ Telegram fallback request failed:", e)
+        log_step_summary(f"> ❌ **Telegram Connection Failed**: `{e}`")
         return False
 
 def check_user_messages_and_reply(current_price, htf_bias, ltf_bias, alignment_text, high_liq, low_liq, status_msg):
-    """Checks if the user sent 'update', 'status', 'daily', etc. to the bot and replies directly!"""
+    """Checks if the user sent any message/update to the bot and replies directly!"""
     token, default_chat_id = get_telegram_creds()
     if not token:
         print("Skipping Telegram message check: No token provided.")
@@ -62,6 +90,10 @@ def check_user_messages_and_reply(current_price, htf_bias, ltf_bias, alignment_t
     try:
         url = f"https://api.telegram.org/bot{token}/getUpdates"
         r = requests.get(url, timeout=10)
+        if r.status_code == 401:
+            print("❌ getUpdates returned 401 Unauthorized: Bot token is invalid or revoked!")
+            log_step_summary("> ⚠️ **Bot Token Invalid (401)**: The bot token provided is rejected by Telegram. Please update it with a new one from `@BotFather`.")
+            return
         if r.status_code != 200:
             print(f"⚠️ getUpdates returned status {r.status_code}: {r.text}")
             return
@@ -75,21 +107,18 @@ def check_user_messages_and_reply(current_price, htf_bias, ltf_bias, alignment_t
         print(f"Found {len(results)} updates in Telegram inbox.")
         last_update_id = results[-1].get("update_id", 0)
         
-        # Collect distinct chats that asked for an update
+        # Collect distinct chats that sent messages
         chats_to_reply = set()
         
         for item in results:
             msg_obj = item.get("message") or item.get("edited_message") or {}
-            text = msg_obj.get("text", "").lower().strip()
+            text = msg_obj.get("text", "").strip()
             sender_id = msg_obj.get("chat", {}).get("id")
-            
-            # Check if text contains any trigger command
-            if any(cmd in text for cmd in ["update", "status", "daily", "check", "gold", "price", "/start", "hi", "hello"]):
-                if sender_id:
-                    chats_to_reply.add(str(sender_id))
-                    print(f"📩 Recognized update command '{text}' from chat {sender_id}!")
+            if sender_id:
+                chats_to_reply.add(str(sender_id))
+                print(f"📩 Recognized message '{text}' from chat {sender_id}!")
 
-        # If user asked from Telegram, reply directly to their chat!
+        # Reply directly with live status
         if chats_to_reply:
             reply_msg = (
                 f"📊 *GOLD (XAU/USD) LIVE STATUS REPORT*\n"
@@ -101,16 +130,13 @@ def check_user_messages_and_reply(current_price, htf_bias, ltf_bias, alignment_t
                 f"🔺 *Ceiling (Buy-side High):* ${high_liq:.2f}\n"
                 f"🔻 *Floor (Sell-side Low):* ${low_liq:.2f}\n\n"
                 f"📌 *Strategy Status:* {status_msg}\n\n"
-                f"🤖 *Bot Health:* Running 24/7 in cloud. Send *update* anytime for live data!"
+                f"🤖 *Bot Health:* Running 24/7 in cloud. Send any text anytime for live data!"
             )
             for chat in chats_to_reply:
                 send_telegram(reply_msg, target_chat_id=chat)
                 
             # Clear read messages offset
             requests.get(f"{url}?offset={last_update_id + 1}", timeout=5)
-        else:
-            print("No matching command keywords found in recent Telegram messages.")
-            
     except Exception as e:
         print("Note on Telegram check exception:", e)
 
@@ -134,16 +160,25 @@ def send_daily_briefing(current_price, htf_bias, ltf_bias, alignment_text, high_
         f"🤖 *Bot Status:* 24/7 Cloud scanner is active and watching. Have a profitable trading day!"
     )
     print("Sending Daily Market Briefing to Telegram...")
-    send_telegram(msg)
+    return send_telegram(msg)
 
 def analyze_gold():
     symbol = "GC=F" # Gold Futures (tracks spot Gold XAU/USD)
-    print(f"==================================================")
-    print(f"📊 Gold (XAU/USD) Smart Cloud Scanner - {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}")
-    print(f"==================================================")
     
     token, chat_id = get_telegram_creds()
-    print(f"Debug: Token present: {bool(token)} (length: {len(token)}), Chat ID present: {bool(chat_id)} (val: {chat_id})")
+    masked_token = (token[:6] + "..." + token[-4:]) if len(token) > 10 else ("EMPTY" if not token else "INVALID")
+    masked_chat = (chat_id[:3] + "..." + chat_id[-2:]) if len(chat_id) > 5 else (chat_id if chat_id else "EMPTY")
+
+    print(f"==================================================")
+    print(f"📊 Gold (XAU/USD) Smart Cloud Scanner - {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}")
+    print(f"Token Configured: {bool(token)} ({masked_token}) | Chat ID: {bool(chat_id)} ({masked_chat})")
+    print(f"==================================================")
+    
+    log_step_summary(f"""### 🪙 Gold 24/7 Cloud Scanner Run Summary
+- ⏰ **Scan Time (UTC):** `{datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}`
+- 🔑 **TELEGRAM_TOKEN Secret:** `{'Configured (' + masked_token + ')' if token else '❌ MISSING from Secrets'}`
+- 💬 **TELEGRAM_CHAT_ID Secret:** `{'Configured (' + masked_chat + ')' if chat_id else '❌ MISSING from Secrets'}`
+""")
 
     # 1. Fetch 1-Hour data for macro trend
     print("Fetching 1-Hour data...")
@@ -152,6 +187,7 @@ def analyze_gold():
         df_1h = yf.download("XAUUSD=X", period="5d", interval="1h", progress=False)
         if df_1h.empty:
             print("Market data unavailable currently.")
+            log_step_summary("> ⚠️ Market data unavailable currently from data feed.")
             return
     
     if isinstance(df_1h.columns, pd.MultiIndex):
@@ -250,15 +286,26 @@ def analyze_gold():
     else:
         status_msg = "⏳ WAITING FOR TREND ALIGNMENT: 1H and 15M pointing in different directions."
 
+    log_step_summary(f"""### 📊 Market Status
+- **Current Price:** `${current_price:.2f}`
+- **1-Hour Trend:** `{htf_bias}`
+- **15-Min Trend:** `{ltf_bias}`
+- **Alignment:** `{alignment_text}`
+- **Strategy Condition:** `{status_msg}`
+""")
+
     # A. AUTOMATIC DAILY BRIEFING OR TEST RUN TRIGGER
     is_daily_cron = os.environ.get("IS_DAILY_CRON", "").lower() in ["true", "1", "yes"]
     is_test_run = os.environ.get("SEND_TEST", "").lower() in ["true", "1", "yes"]
     
     if is_daily_cron or is_test_run:
         print(f"Triggering briefing: is_daily_cron={is_daily_cron}, is_test_run={is_test_run}")
-        send_daily_briefing(current_price, htf_bias, ltf_bias, alignment_text, recent_swing_high, recent_swing_low)
+        briefing_delivered = send_daily_briefing(current_price, htf_bias, ltf_bias, alignment_text, recent_swing_high, recent_swing_low)
+        if is_test_run and not briefing_delivered:
+            print("❌ Manual Test Dispatch failed to deliver Telegram message. Exiting with error so GitHub shows the failure!")
+            sys.exit(1)
 
-    # B. Check and reply directly to user commands (/update, /daily, /status)
+    # B. Check and reply directly to user commands (/update, /daily, /status, or any message)
     check_user_messages_and_reply(current_price, htf_bias, ltf_bias, alignment_text, recent_swing_high, recent_swing_low, status_msg)
 
     # C. FULL CONFIRMED ENTRY SIGNAL
