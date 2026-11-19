@@ -8,6 +8,10 @@ on:
     - cron: '0 4 * * 1-5'
   workflow_dispatch: # Allows manual trigger from GitHub anytime!
 
+concurrency:
+  group: gold-scanner
+  cancel-in-progress: true
+
 jobs:
   scan:
     runs-on: ubuntu-latest
