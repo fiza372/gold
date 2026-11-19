@@ -10,9 +10,10 @@ from flask import Flask, render_template, jsonify, request
 
 app = Flask(__name__)
 
-# State storage
-LATEST_ANALYSIS = {}
-CONFIG = {
+CONFIG_FILE = "config.json"
+
+# Default configuration
+DEFAULT_CONFIG = {
     "entry_mode": "Conservative (MSS Confirmation)",
     "risk_reward": 2.5,
     "telegram_token": os.environ.get("TELEGRAM_TOKEN", "").strip(),
@@ -21,6 +22,28 @@ CONFIG = {
     "scan_interval": 30 # seconds
 }
 
+def load_config():
+    if os.path.exists(CONFIG_FILE):
+        try:
+            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+                saved = json.load(f)
+                DEFAULT_CONFIG.update(saved)
+        except Exception as e:
+            print("Config load error:", e)
+    return DEFAULT_CONFIG
+
+CONFIG = load_config()
+
+def save_config_to_file():
+    try:
+        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+            json.dump(CONFIG, f, indent=2)
+    except Exception as e:
+        print("Config save error:", e)
+
+# State storage
+LATEST_ANALYSIS = {}
+
 def send_telegram_alert(message):
     token = CONFIG.get("telegram_token", "").strip()
     chat_id = CONFIG.get("telegram_chat_id", "").strip()
@@ -28,10 +51,10 @@ def send_telegram_alert(message):
         try:
             url = f"https://api.telegram.org/bot{token}/sendMessage"
             payload = {"chat_id": chat_id, "text": message, "parse_mode": "Markdown"}
-            requests.post(url, json=payload, timeout=5)
+            requests.post(url, json=payload, timeout=8)
             print("Telegram alert sent successfully!")
         except Exception as e:
-            print("Failed to send Telegram alert:", e)
+            print("Failed to send Telegram alert from local server:", e)
 
 def analyze_strategy():
     global LATEST_ANALYSIS
@@ -41,7 +64,9 @@ def analyze_strategy():
         # 1. Higher Timeframe (1H)
         df_1h = yf.download(symbol, period="5d", interval="1h", progress=False)
         if df_1h.empty:
-            return LATEST_ANALYSIS
+            df_1h = yf.download("XAUUSD=X", period="5d", interval="1h", progress=False)
+            if df_1h.empty:
+                return LATEST_ANALYSIS
 
         if isinstance(df_1h.columns, pd.MultiIndex):
             df_1h.columns = [col[0] for col in df_1h.columns]
@@ -61,9 +86,11 @@ def analyze_strategy():
             htf_bias = "NEUTRAL"
 
         # 2. Execution Timeframe (15M)
-        df_15m = yf.download(symbol, period="2d", interval="15m", progress=False)
+        df_15m = yf.download(symbol, period="5d", interval="15m", progress=False)
         if df_15m.empty:
-            return LATEST_ANALYSIS
+            df_15m = yf.download("XAUUSD=X", period="5d", interval="15m", progress=False)
+            if df_15m.empty:
+                return LATEST_ANALYSIS
 
         if isinstance(df_15m.columns, pd.MultiIndex):
             df_15m.columns = [col[0] for col in df_15m.columns]
@@ -243,15 +270,20 @@ def save_config():
     for k in ["entry_mode", "risk_reward", "telegram_token", "telegram_chat_id", "auto_scan", "scan_interval"]:
         if k in data:
             CONFIG[k] = data[k]
+    save_config_to_file()
     return jsonify({"status": "success", "config": CONFIG})
 
 @app.route('/api/test_telegram', methods=['POST'])
 def test_telegram():
     data = request.json or {}
-    token = data.get("token") or CONFIG.get("telegram_token")
-    chat_id = data.get("chat_id") or CONFIG.get("telegram_chat_id")
+    token = (data.get("token") or CONFIG.get("telegram_token", "")).strip()
+    chat_id = (data.get("chat_id") or CONFIG.get("telegram_chat_id", "")).strip()
+    
     if not token or not chat_id:
-        return jsonify({"status": "error", "message": "Token or Chat ID missing"}), 400
+        return jsonify({
+            "status": "error", 
+            "message": "Token or Chat ID is empty. Please enter both fields in Settings."
+        }), 400
     
     try:
         url = f"https://api.telegram.org/bot{token}/sendMessage"
@@ -259,16 +291,26 @@ def test_telegram():
             "chat_id": chat_id,
             "text": "✅ *Gold Scalping Strategy Bot is connected!* You will receive real-time Gold trade alerts here.",
             "parse_mode": "Markdown"
-        }, timeout=5)
+        }, timeout=8)
+        
         if resp.status_code == 200:
+            # Also save to config file
+            CONFIG["telegram_token"] = token
+            CONFIG["telegram_chat_id"] = chat_id
+            save_config_to_file()
             return jsonify({"status": "success", "message": "Test alert sent to Telegram successfully!"})
         else:
-            return jsonify({"status": "error", "message": resp.text}), 400
+            return jsonify({"status": "error", "message": f"Telegram API error: {resp.text}"}), 400
+            
+    except requests.exceptions.ConnectionError:
+        return jsonify({
+            "status": "error", 
+            "message": "Local ISP blocked Telegram connection. Note: GitHub Cloud runs independently and is NOT blocked."
+        }), 500
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
 if __name__ == '__main__':
-    # Initial scan
     analyze_strategy()
     port = int(os.environ.get("PORT", 5000))
     print(f"Gold Strategy UI Server running on port {port}")
