@@ -6,9 +6,6 @@ from datetime import datetime
 import pandas as pd
 import yfinance as yf
 
-# Track state to avoid duplicate alerts
-STATE_FILE = "scanner_state.json"
-
 def get_telegram_creds():
     token = os.environ.get("TELEGRAM_TOKEN", "").strip()
     chat_id = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
@@ -35,7 +32,7 @@ def send_telegram(msg):
         return False
 
 def check_user_messages_and_reply(current_price, htf_bias, ltf_bias, alignment_text, high_liq, low_liq, status_msg):
-    """Checks if the user sent 'update', 'status', or any command on Telegram and replies back!"""
+    """Checks if the user sent 'update', 'status', 'daily', or any command on Telegram and replies back!"""
     token, chat_id = get_telegram_creds()
     if not token:
         return
@@ -52,23 +49,15 @@ def check_user_messages_and_reply(current_price, htf_bias, ltf_bias, alignment_t
             return
         
         last_update_id = results[-1].get("update_id", 0)
-        
-        # Check if user sent any message recently
-        user_asked_for_update = False
-        target_chat_id = chat_id
+        user_asked = False
         
         for item in results:
             msg_obj = item.get("message", {})
             text = msg_obj.get("text", "").lower().strip()
-            sender_chat = str(msg_obj.get("chat", {}).get("id", ""))
-            
-            # If user sent /update, update, status, /status, /start, gold, or check
-            if any(cmd in text for cmd in ["update", "status", "check", "gold", "price", "/start"]):
-                user_asked_for_update = True
-                if sender_chat:
-                    target_chat_id = sender_chat
+            if any(cmd in text for cmd in ["update", "status", "daily", "check", "gold", "price", "/start"]):
+                user_asked = True
 
-        if user_asked_for_update:
+        if user_asked:
             print("📩 User requested update on Telegram! Sending full report...")
             reply = (
                 f"📊 *GOLD (XAU/USD) LIVE STATUS REPORT*\n"
@@ -80,16 +69,35 @@ def check_user_messages_and_reply(current_price, htf_bias, ltf_bias, alignment_t
                 f"🔺 *Ceiling (Buy-side High):* ${high_liq:.2f}\n"
                 f"🔻 *Floor (Sell-side Low):* ${low_liq:.2f}\n\n"
                 f"📌 *Strategy Status:* {status_msg}\n\n"
-                f"🤖 *Bot Health:* Running 24/7 in the cloud. You can send *update* anytime to get fresh market data!"
+                f"🤖 *Bot Health:* Running 24/7 in the cloud. You can send *update* or *daily* anytime!"
             )
-            # Send reply
             send_telegram(reply)
-            
-            # Confirm offset to clear read messages
             requests.get(f"{url}?offset={last_update_id + 1}", timeout=5)
             
     except Exception as e:
         print("Note on Telegram check:", e)
+
+def send_daily_briefing(current_price, htf_bias, ltf_bias, alignment_text, high_liq, low_liq):
+    """Sends the formatted daily morning market update."""
+    today_str = datetime.now().strftime('%A, %b %d, %Y')
+    msg = (
+        f"🌅 *DAILY GOLD (XAU/USD) MARKET BRIEFING*\n"
+        f"📅 *Date:* {today_str}\n\n"
+        f"💰 *Current Price:* ${current_price:.2f}\n"
+        f"📈 *1-Hour Macro Trend:* {htf_bias}\n"
+        f"📉 *15-Minute Trend:* {ltf_bias}\n"
+        f"⚖️ *Alignment:* {alignment_text}\n\n"
+        f"🎯 *Key Levels for Today:*\n"
+        f"🔺 *Major Resistance (Ceiling):* ${high_liq:.2f}\n"
+        f"🔻 *Major Support (Floor):* ${low_liq:.2f}\n\n"
+        f"📋 *Today's Strategy Plan:*\n"
+        f"• Wait for 1H & 15M trend alignment before looking for trades.\n"
+        f"• Watch for liquidity sweeps at key levels.\n"
+        f"• Target quick 1:2.5 Risk-to-Reward on clean moves.\n\n"
+        f"🤖 *Bot Status:* 24/7 Cloud scanner is active and watching. Have a profitable trading day!"
+    )
+    print("Sending automatic Daily Market Briefing to Telegram...")
+    send_telegram(msg)
 
 def analyze_gold():
     symbol = "GC=F" # Gold Futures (tracks spot Gold XAU/USD)
@@ -198,18 +206,19 @@ def analyze_gold():
     elif aligned_bearish and swept_bearish:
         status_msg = "🔥 SELL SETUP CONFIRMED! Ready to enter."
     elif aligned_bullish or aligned_bearish:
-        status_msg = f"👀 WATCHING FOR SWEEP: Timeframes are aligned, waiting for liquidity grab near ${recent_swing_low:.2f} / ${recent_swing_high:.2f}."
+        status_msg = f"👀 WATCHING FOR SWEEP: Timeframes aligned, waiting for liquidity grab near ${recent_swing_low:.2f} / ${recent_swing_high:.2f}."
     else:
-        status_msg = "⏳ WAITING FOR TREND ALIGNMENT: 1H and 15M are currently pointing in different directions. Capital is protected."
+        status_msg = "⏳ WAITING FOR TREND ALIGNMENT: 1H and 15M pointing in different directions."
 
-    # A. Check and answer any Telegram user requests (/update)
+    # A. AUTOMATIC DAILY BRIEFING (Triggered daily at 04:00 UTC / 9:00 AM local or via DAILY_UPDATE=true)
+    is_daily_cron = os.environ.get("IS_DAILY_CRON", "").lower() in ["true", "1", "yes"]
+    is_test_run = os.environ.get("SEND_TEST", "").lower() in ["true", "1", "yes"]
+    
+    if is_daily_cron or is_test_run:
+        send_daily_briefing(current_price, htf_bias, ltf_bias, alignment_text, recent_swing_high, recent_swing_low)
+
+    # B. Check and reply to user commands (/update, /daily, /status)
     check_user_messages_and_reply(current_price, htf_bias, ltf_bias, alignment_text, recent_swing_high, recent_swing_low, status_msg)
-
-    # B. Condition 2 & 3: PRE-ALERT / HEADS UP NOTIFICATION
-    # If 1H & 15M are aligned and price is near liquidity pool (within 0.3% of high/low)
-    dist_to_low = abs(current_price - recent_swing_low)
-    dist_to_high = abs(recent_swing_high - current_price)
-    is_approaching_poi = (aligned_bullish and dist_to_low < 8.0) or (aligned_bearish and dist_to_high < 8.0)
 
     # C. FULL CONFIRMED ENTRY SIGNAL
     rr = 2.5
@@ -240,21 +249,6 @@ def analyze_gold():
             f"📌 *Setup:* 1H & 15M Bearish Aligned + Sweep at {sweep_time}"
         )
         send_telegram(msg)
-        
-    elif is_approaching_poi:
-        # Pre-alert: 2 conditions met!
-        direction = "BULLISH 🟢" if aligned_bullish else "BEARISH 🔴"
-        target_zone = f"Demand floor near ${recent_swing_low:.2f}" if aligned_bullish else f"Supply ceiling near ${recent_swing_high:.2f}"
-        heads_up_msg = (
-            f"👀 *HEADS UP: GOLD SETUP FORMING*\n\n"
-            f"⚡ *Conditions Met:* 2 of 3 (Timeframes Aligned & Near POI)\n"
-            f"📈 *Trend:* {direction}\n"
-            f"🎯 *Target Zone:* Approaching {target_zone}\n"
-            f"💰 *Current Price:* ${current_price:.2f}\n\n"
-            f"👉 *Action:* Get ready on your broker. If price sweeps this zone and rejects, an official ENTRY alert will follow!"
-        )
-        # To avoid spamming, only print/send when appropriate
-        print("Pre-alert condition satisfied: Setup is building!")
 
     print(f"\nScan complete. Status: {status_msg}")
 

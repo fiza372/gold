@@ -1,0 +1,8 @@
+{
+  "entry_mode": "Conservative (MSS Confirmation)",
+  "risk_reward": 2.5,
+  "telegram_token": "9251251927:AAEeDkPzj9pFAdX-R2sHj304bJysjov1E_4",
+  "telegram_chat_id": "9003083094",
+  "auto_scan": true,
+  "scan_interval": 30
+}
